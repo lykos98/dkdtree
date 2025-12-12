@@ -1,0 +1,52 @@
+#!/bin/bash
+
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=2
+#SBATCH --cpus-per-task=56
+#SBATCH --time=04:00:00
+#SBATCH --job-name=dadp_test
+#SBATCH --partition=dcgp_usr_prod 
+#SBATCH --account=EUHPC_D18_045
+#SBATCH --output=out_leo
+#SBATCH --error=err_leo
+#SBATCH --mem=480G
+
+
+
+cd $SLURM_SUBMIT_DIR
+
+#module load gcc
+#module load openmpi
+module load intel-oneapi-mpi
+
+make clean
+make
+ulimit -s unlimited
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+export OMP_PLACES=cores
+export OMP_PROC_BIND=close
+export PSM2_MQ_SENDREQS_MAX=268435456
+export PSM2_MQ_RECVREQS_MAX=268435456
+
+rm bb/*
+mkdir bb
+
+OUT_ASSIGNMENT=/leonardo_scratch/large/userexternal/ftomba00/assignment
+OUT_DATA=/leonardo_scratch/large/userexternal/ftomba00/data
+
+IN_DATA=/leonardo_work/EUHPC_D18_045
+NSYS=
+
+#10^6 points 
+time mpirun -n ${SLURM_NTASKS} --map-by ppr:1:socket:PE=${SLURM_CPUS_PER_TASK}  ./main -t f32 -i ${IN_DATA}/norm_data/std_LR_091_0001 -d 5 -a ${OUT_ASSIGNMENT} -o ${OUT_DATA}
+#time mpirun -n ${SLURM_NTASKS} --map-by core  ./main -t f32 -i ${IN_DATA}/norm_data/std_LR_091_0001 -d 5 -a ${OUT_ASSIGNMENT} -o ${OUT_DATA}
+
+#34 * 10^6 points
+#time mpirun -n ${SLURM_NTASKS} --map-by ppr:1:socket:PE=${SLURM_CPUS_PER_TASK}  ./main -t f32 -i ${IN_DATA}/norm_data/std_g1212639_091_0001 -d 5 -a ${OUT_ASSIGNMENT} -o ${OUT_DATA}
+
+#88 * 10^6 points 
+#time mpirun -n ${SLURM_NTASKS} --map-by ppr:1:socket:PE=${SLURM_CPUS_PER_TASK}  ./main -t f32 -i ${IN_DATA}/norm_data/std_g5503149_091_0000 -d 5 -a ${OUT_ASSIGNMENT} -o ${OUT_DATA}
+
+
+#200 * 10^6 points
+#time mpirun -n ${SLURM_NTASKS} --map-by ppr:1:socket:PE=${SLURM_CPUS_PER_TASK}  ./main -t f32 -i ${IN_DATA}/norm_data/std_g2980844_091_0000 -d 5 -a ${OUT_ASSIGNMENT} -o ${OUT_DATA}

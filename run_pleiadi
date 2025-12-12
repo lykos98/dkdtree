@@ -1,0 +1,33 @@
+#!/bin/bash
+
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=2
+#SBATCH --cpus-per-task=18
+#SBATCH --time=01:00:00
+#SBATCH --job-name=dADP-test
+#SBATCH --account=ulearn
+#SBATCH --partition=pleiadi
+#SBATCH --output=out_pleiadi
+#SBATCH --error=err_pleiadi
+#SBATCH --mem=230G
+
+cd $SLURM_SUBMIT_DIR
+module restore dev_pleiadi
+source /u/ftomba/my_envs/dadac-dev/bin/activate
+make clean
+make
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+export OMP_PLACES=cores
+export OMP_PROC_BIND=close
+#export PSM2_MQ_SENDREQS_MAX=268435456
+#export PSM2_MQ_RECVREQS_MAX=268435456
+
+rm bb/*
+
+#time mpirun -n ${SLURM_NTASKS} --map-by ppr:1:node:PE=${SLURM_CPUS_PER_TASK}  main
+time mpirun -n ${SLURM_NTASKS} --mca orte_base_help_aggregate 0 --map-by ppr:1:socket:PE=${SLURM_CPUS_PER_TASK}  main
+#time mpirun -n ${SLURM_NTASKS} --mca orte_base_help_aggregate 0 --map-by core  main
+#time mpirun -n ${SLURM_NTASKS} main
+
+#time python3 check.py
+

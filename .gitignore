@@ -1,0 +1,9 @@
+main
+sync.sh
+leo_sync.sh
+lumi_sync.sh
+bb
+**.ipynb*
+scalability_results
+check.py
+var.py
