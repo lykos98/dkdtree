@@ -52,11 +52,14 @@ typedef struct
     float_t* ub;
 } bounding_box_t;
 
-struct point_t
-{
-    idx_t    array_idx;
-    float_t* data;
-};
+#ifndef POINT
+    #define POINT
+    typedef struct point_t
+    {
+        idx_t    array_idx;
+        float_t* data;
+    } point_t;
+#endif
 
 struct pivot_t;
 
@@ -96,7 +99,7 @@ struct kdtree_t
 };
 
 typedef struct pivot_t pivot_t;
-typedef struct point_t point_t;
+//typedef struct point_t point_t;
 typedef struct kdtree_t kdtree_t;
 
 
@@ -305,6 +308,38 @@ static int faster_point_compute_median(point_t *a, idx_t left, idx_t right, int 
             right = pivotIndex - 1;
         }
         // If the median is in the right subarray, adjust the `left` boundary.
+        else {
+            left = pivotIndex + 1;
+        }
+    }
+    return -1; // Should not be reached in a valid scenario.
+}
+
+// Function to find the n-th smallest element in a sub-array of points using Quickselect.
+static int point_compute_nth_element(point_t *a, idx_t left, idx_t right, idx_t rank, int split_var, idx_t dims) 
+{
+    // `k` is the absolute index of the rank-th smallest element in the full array.
+    // `rank` is the 0-indexed rank in the subarray `a[left...right]`.
+    int k = left + rank;
+
+    while (left <= right) {
+        // Base case: if the subarray has only one element, it's the desired element.
+        if (left == right) {
+            return left;
+        }
+
+        // Partition the array using a random pivot and get the pivot's final index.
+        int pivotIndex = faster_point_partition_random(a, left, right, split_var, dims);
+
+        // If the pivot is the rank-th element, we are done.
+        if (pivotIndex == k) {
+            return pivotIndex;
+        }
+        // If the rank-th element is in the left subarray, adjust the `right` boundary.
+        else if (pivotIndex > k) {
+            right = pivotIndex - 1;
+        }
+        // If the rank-th element is in the right subarray, adjust the `left` boundary.
         else {
             left = pivotIndex + 1;
         }
@@ -675,9 +710,109 @@ static void build_tree_kdtree_parallel(kdtree_t* tree)
     }
 }
 
+static idx_t parallel_make_tree_w_ranks(point_t* points, pivot_t* pivots, 
+                                        idx_t child_pivot_idx, int left_or_right, 
+                                        idx_t start, idx_t end, int level, idx_t dims, 
+                                        idx_t start_rank, idx_t end_rank) 
+{
+    // this only build the first log2(ranks) levels
+    idx_t parent_pivot_idx = (child_pivot_idx > 0) ? ((child_pivot_idx - 1) / 2) : -1;
+    pivot_t *pivot = pivots + child_pivot_idx;
+    pivot_t *parent = (parent_pivot_idx != (idx_t)-1) ? (pivots + parent_pivot_idx) : NULL;
+
+    switch (left_or_right) 
+    {
+        case HP_LEFT_SIDE:
+        {
+            memcpy(pivot->bounding_box.lb, parent->bounding_box.lb, dims*sizeof(float_t));
+            memcpy(pivot->bounding_box.ub, parent->bounding_box.ub, dims*sizeof(float_t));
+            idx_t parent_splitting_dim = parent->as.internal.split_variable;
+            float_t parent_split_val = parent->as.internal.split_value;
+            pivot->bounding_box.ub[parent_splitting_dim] = parent_split_val; 
+        }
+        break;
+
+        case HP_RIGHT_SIDE:
+        {
+            memcpy(pivot->bounding_box.lb, parent->bounding_box.lb, dims*sizeof(float_t));
+            memcpy(pivot->bounding_box.ub, parent->bounding_box.ub, dims*sizeof(float_t));
+            idx_t parent_splitting_dim = parent->as.internal.split_variable;
+            float_t parent_split_val = parent->as.internal.split_value;
+            pivot->bounding_box.lb[parent_splitting_dim] = parent_split_val;
+        }
+        break;
+
+        default:
+        {
+            for(int i=0; i<dims; ++i) {
+                pivot->bounding_box.lb[i] = FLT_MAX;
+                pivot->bounding_box.ub[i] = -FLT_MAX;
+            }
+            for(idx_t i=start; i<=end; ++i) {
+                for(idx_t j=0; j<dims; ++j) {
+                    pivot->bounding_box.lb[j] = MIN(pivot->bounding_box.lb[j], points[i].data[j]);
+                    pivot->bounding_box.ub[j] = MAX(pivot->bounding_box.ub[j], points[i].data[j]);
+                }
+            }
+        }
+        break;
+    }
+    
+    //handle the case it is a leaf
+
+    if(start_rank == end_rank)
+    {
+        pivots[child_pivot_idx].is_leaf = true;
+        // write here the owner!!!
+        pivots[child_pivot_idx].as.leaf.leaf_point_count = start_rank;
+        return child_pivot_idx;
+    }
+    
+    int split_var = 0;
+    float_t max_extension = 0;
+    for(idx_t d=0; d < dims; ++d) {
+        float_t box_extension = pivot->bounding_box.ub[d] - pivot->bounding_box.lb[d];
+        box_extension = box_extension*box_extension;
+        if (box_extension > max_extension) {
+            max_extension = box_extension;
+            split_var = d;
+        }
+    }
+
+
+    idx_t middle_rank = (start_rank + end_rank)/2;
+
+    float_t fraction = (float_t)(middle_rank - start_rank + 1)/(float_t)(end_rank - start_rank + 1);
+    float_t nth_place  = (end - start)*fraction;
+
+    int nth_idx = point_compute_nth_element(points, start, end, (idx_t)nth_place, split_var, dims); 
+
+    // printf("child_pivot_idx %lu start_rank %lu end_rank %lu middle %lu nth_place %.2lf fraction %.2lf\n", 
+    //         child_pivot_idx, start_rank, end_rank, middle_rank, nth_place, fraction);
+    //printf("child_pivot_idx %lu start %lu end %lu nth %lu\n", child_pivot_idx, start, end, (idx_t)nth_idx);
+
+    if (nth_idx > -1) {
+        pivots[child_pivot_idx].as.internal.split_variable = split_var;
+        pivots[child_pivot_idx].as.internal.split_value = points[nth_idx].data[split_var];
+        
+        pivots[child_pivot_idx].as.internal.lch_idx = 
+            parallel_make_tree_w_ranks(points, pivots, child_pivot_idx*2 + 1, 
+                                    HP_LEFT_SIDE, start, nth_idx, level + 1, 
+                                    dims, start_rank, middle_rank);
+        
+        pivots[child_pivot_idx].as.internal.rch_idx = 
+            parallel_make_tree_w_ranks(points, pivots, child_pivot_idx*2 + 2, 
+                                        HP_RIGHT_SIDE, nth_idx + 1, end, level + 1, 
+                                        dims, middle_rank + 1, end_rank);
+        
+    }
+
+    return child_pivot_idx;
+}
+
 static idx_t parallel_recursive_make_tree(point_t* points, pivot_t* pivots, 
-                                   idx_t child_pivot_idx, int left_or_right, 
-                                   idx_t start, idx_t end, int level, idx_t dims) 
+                                          idx_t child_pivot_idx, int left_or_right, 
+                                          idx_t start, idx_t end, int level, idx_t dims) 
 {
     // Fallback to serial version for small subproblems
     if ((end - start) < SERIAL_BUILD_CUTOFF) {
@@ -783,6 +918,7 @@ static void build_tree_kdtree(kdtree_t* tree)
     * Wrapper for make_tree function.               *
     * Simplifies interfaces and takes time measures *
     *************************************************/
-    // tree->root = recursive_make_tree(tree->__points, tree->__pivots, 0, -1, 0, tree->n_points-1, 0, tree->dims);
-    tree->root = parallel_recursive_make_tree(tree->__points, tree->__pivots, 0, -1, 0, tree->n_points-1, 0, tree->dims);
+    tree->root = recursive_make_tree(tree->__points, tree->__pivots, 0, -1, 0, tree->n_points-1, 0, tree->dims);
+    //tree->root = parallel_recursive_make_tree(tree->__points, tree->__pivots, 0, -1, 0, tree->n_points-1, 0, tree->dims);
 }
+

@@ -52,13 +52,18 @@ int cmp_float_t(const void* a, const void* b)
 
 
 /* quickselect for an element along a dimension */
-void swap_data_element(float_t *a, float_t *b, size_t vec_len) {
+void swap_data_element(point_t *a, point_t *b, size_t vec_len) {
+    idx_t tmp_dp;
+    tmp_dp = a->array_idx;
+    a->array_idx = b->array_idx;
+    a->array_idx = tmp_dp;
+
     float_t tmp;
     for (size_t i = 0; i < vec_len; ++i) 
     {
-        tmp = a[i];
-        a[i] = b[i];
-        b[i] = tmp;
+        tmp = a->data[i];
+        a->data[i] = b->data[i];
+        b->data[i] = tmp;
     }
 }
 
@@ -66,19 +71,19 @@ int compare_data_element(float_t *a, float_t *b, int compare_dim) {
     return -((a[compare_dim] - b[compare_dim]) > 0.) + ((a[compare_dim] - b[compare_dim]) < 0.);
 }
 
-int partition_data_element(float_t *array, int vec_len, int compare_dim,
+int partition_data_element(point_t *array, int vec_len, int compare_dim,
                            int left, int right, int pivot_index) 
 {
     int store_index = left;
     int i;
 
     /* Move pivot to end */
-    swap_data_element(array + pivot_index * vec_len, array + right * vec_len, vec_len);
+    swap_data_element(array + pivot_index, array + right, vec_len);
     for (i = left; i < right; ++i) 
     {
         // if(compare_data_element(array + i*vec_len, array + pivot_index*vec_len,
         // compare_dim ) >= 0){
-        if (array[i * vec_len + compare_dim] < array[right * vec_len + compare_dim]) 
+        if (array[i].data[compare_dim] < array[right].data[compare_dim]) 
         {
             swap_data_element(array + store_index * vec_len, array + i * vec_len, vec_len);
             store_index += 1;
@@ -90,7 +95,7 @@ int partition_data_element(float_t *array, int vec_len, int compare_dim,
     return store_index;
 }
 
-int qselect_data_element(float_t *array, int vec_len, int compare_dim, int left, int right, int n) 
+int qselect_data_element(point_t *array, int vec_len, int compare_dim, int left, int right, int n) 
 {
     int pivot_index;
     if (left == right) 
@@ -114,25 +119,28 @@ int qselect_data_element(float_t *array, int vec_len, int compare_dim, int left,
     }
 }
 
-int quickselect_data_element(float_t *array, int vec_len, int array_size, int compare_dim, int k) 
+int quickselect_data_element(point_t *array, int vec_len, int array_size, int compare_dim, int k) 
 {
     return qselect_data_element(array, vec_len, compare_dim, 0, array_size - 1, k - 1);
 }
 
 int CMP_DIM;
-int compare_data_element_sort(const void *a, const void *b) {
+int compare_data_element_sort(const void *a, const void *b) 
+{
     float_t aa = *((float_t *)a + CMP_DIM);
     float_t bb = *((float_t *)b + CMP_DIM);
     return ((aa - bb) > 0.) - ((aa - bb) < 0.);
 }
 
-void compute_bounding_box(global_context_t *ctx) {
+void compute_bounding_box(global_context_t *ctx)
+{
     ctx->lb_box = (float_t *)MY_MALLOC(ctx->dims * sizeof(float_t));
     ctx->ub_box = (float_t *)MY_MALLOC(ctx->dims * sizeof(float_t));
 
-    for (size_t d = 0; d < ctx->dims; ++d) {
-    ctx->lb_box[d] = 99999999.;
-    ctx->ub_box[d] = -99999999.;
+    for (size_t d = 0; d < ctx->dims; ++d) 
+    {
+        ctx->lb_box[d] =  FLT_MAX;
+        ctx->ub_box[d] = -FLT_MAX;
     }
 
     #define local_data ctx->local_data
@@ -187,75 +195,70 @@ partition_t dequeue_partition(partition_queue_t *queue)
   return queue->data[--(queue->count)];
 }
 
-void compute_medians_and_check(global_context_t *ctx, float_t *data) {
-    float_t prop = 0.5;
-    int k = (int)(ctx->local_n_points * prop);
-    int d = 1;
-
-    /*quick select on a particular dimension */
-    CMP_DIM = d;
-    int kk = (k - 1) * ctx->dims;
-
-    int count = 0;
-    // idx = idx - 1;
-    //
-    int aaa = quickselect_data_element(ctx->local_data, (int)(ctx->dims), (int)(ctx->local_n_points), d, k);
-    /*
-    * sanity check
-    * check if the median found in each node is
-    * a median
-    */
-
-    float_t *medians_rcv = (float_t *)MY_MALLOC(ctx->dims * ctx->world_size * sizeof(float_t));
-
-    /*
-    * MPI_Allgather(     const void *sendbuf,
-    *                     int sendcount,
-    *                     MPI_Datatype sendtype,
-    *                     void *recvbuf,
-    *                     int recvcount,
-    *                     MPI_Datatype recvtype,
-    *                     MPI_Comm comm)
-    */
-
-    /* Exchange medians */
-
-    MPI_Allgather(ctx->local_data + kk, ctx->dims, MPI_MY_FLOAT, medians_rcv, ctx->dims, MPI_MY_FLOAT, ctx->mpi_communicator);
-
-    /* sort medians on each node */
-
-    CMP_DIM = d;
-    qsort(medians_rcv, ctx->world_size, ctx->dims * sizeof(float_t), compare_data_element_sort);
-
-    /*
-    * Evaluate goodness of the median on master which has whole dataset
-    */
-
-    if (ctx->mpi_rank == 0) {
-    int count = 0;
-    int idx = (int)(prop * (ctx->world_size));
-    // idx = idx - 1;
-    for (int i = 0; i < ctx->n_points; ++i) 
-    {
-        count += data[i * ctx->dims + d] <= medians_rcv[idx * ctx->dims + d];
-    }
-    mpi_printf(ctx, "Choosing %lf percentile on dimension %d: empirical prop %lf\n", prop, d, (float_t)count / (float_t)(ctx->n_points));
-    }
-    free(medians_rcv);
-}
+// void compute_medians_and_check(global_context_t *ctx, float_t *data) {
+//     float_t prop = 0.5;
+//     int k = (int)(ctx->local_n_points * prop);
+//     int d = 1;
+//
+//     /*quick select on a particular dimension */
+//     CMP_DIM = d;
+//     int kk = (k - 1) * ctx->dims;
+//
+//     int count = 0;
+//     // idx = idx - 1;
+//     //
+//     int aaa = quickselect_data_element(ctx->data_w_idx, (int)(ctx->dims), (int)(ctx->local_n_points), d, k);
+//     /*
+//     * sanity check
+//     * check if the median found in each node is
+//     * a median
+//     */
+//
+//     float_t *medians_rcv = (float_t *)MY_MALLOC(ctx->dims * ctx->world_size * sizeof(float_t));
+//
+//     /*
+//     * MPI_Allgather(     const void *sendbuf,
+//     *                     int sendcount,
+//     *                     MPI_Datatype sendtype,
+//     *                     void *recvbuf,
+//     *                     int recvcount,
+//     *                     MPI_Datatype recvtype,
+//     *                     MPI_Comm comm)
+//     */
+//
+//     /* Exchange medians */
+//
+//     MPI_Allgather(ctx->local_data + kk, ctx->dims, MPI_MY_FLOAT, medians_rcv, ctx->dims, MPI_MY_FLOAT, ctx->mpi_communicator);
+//
+//     /* sort medians on each node */
+//
+//     CMP_DIM = d;
+//     qsort(medians_rcv, ctx->world_size, ctx->dims * sizeof(float_t), compare_data_element_sort);
+//
+//     /*
+//     * Evaluate goodness of the median on master which has whole dataset
+//     */
+//
+//     if (ctx->mpi_rank == 0) {
+//     int count = 0;
+//     int idx = (int)(prop * (ctx->world_size));
+//     // idx = idx - 1;
+//     for (int i = 0; i < ctx->n_points; ++i) 
+//     {
+//         count += data[i * ctx->dims + d] <= medians_rcv[idx * ctx->dims + d];
+//     }
+//     mpi_printf(ctx, "Choosing %lf percentile on dimension %d: empirical prop %lf\n", prop, d, (float_t)count / (float_t)(ctx->n_points));
+//     }
+//     free(medians_rcv);
+// }
 
 float_t check_pc_pointset_parallel(global_context_t *ctx, pointset_t *ps, guess_t g, int d, float_t prop) {
-    /*
-     * ONLY FOR TEST PURPOSES
-     * gather on master all data
-     * perform the count on master
-     */
 
     size_t pvt_count = 0;
     #pragma omp parallel for reduction(+:pvt_count)
     for (size_t i = 0; i < ps->n_points; ++i) 
     {
-        pvt_count += ps->data[i * ps->dims + d] <= g.x_guess;
+        pvt_count += ps->datapoints[i].data[d] <= g.x_guess;
     }
 
     size_t pvt_n_and_tot[2] = {pvt_count, ps->n_points};
@@ -271,8 +274,74 @@ float_t check_pc_pointset_parallel(global_context_t *ctx, pointset_t *ps, guess_
     return ep;
 }
 
+void compute_bounding_box_data(global_context_t *ctx, float_t *data, float_t* lb_box, float_t* ub_box, idx_t n_points) 
+{
+    #define lb lb_box
+    #define ub ub_box
+
+    for (size_t d = 0; d < ctx->dims; ++d)
+    {
+        lb[d] =  FLT_MAX;
+        ub[d] = -FLT_MAX;
+    }
+
+
+    /* compute minimum and maximum for each dimensions, store them in local bb */
+    /* each processor on its own */
+
+    // this moves memory maybe there is a better way
+    #pragma omp parallel 
+    {
+        float_t* pvt_lb = (float_t*)MY_MALLOC(ctx -> dims * sizeof(float_t));
+        float_t* pvt_ub = (float_t*)MY_MALLOC(ctx -> dims * sizeof(float_t));
+        for (size_t d = 0; d < ctx->dims; ++d)
+        {
+            pvt_lb[d] = FLT_MAX;
+            pvt_ub[d] = -FLT_MAX;
+        }
+
+        #pragma omp for
+        for (size_t i = 0; i < n_points; ++i) 
+        {
+            for (size_t d = 0; d < ctx->dims; ++d) 
+            {
+                pvt_lb[d] = MIN(data[i*ctx->dims + d], pvt_lb[d]);
+                pvt_ub[d] = MAX(data[i*ctx->dims + d], pvt_ub[d]);
+            }
+        }
+
+        #pragma omp critical (bounding_box_reduction)
+        {
+            for (size_t d = 0; d < ctx->dims; ++d) 
+            {
+                lb[d] = MIN(pvt_lb[d], lb[d]);
+                ub[d] = MAX(pvt_ub[d], ub[d]);
+            }
+        }
+
+
+        free(pvt_lb);
+        free(pvt_ub);
+
+    }
+
+    /*get the bounding box */
+
+    MPI_Allreduce(MPI_IN_PLACE, lb, ctx->dims, MPI_MY_FLOAT, MPI_MIN, ctx->mpi_communicator);
+    MPI_Allreduce(MPI_IN_PLACE, ub, ctx->dims, MPI_MY_FLOAT, MPI_MAX, ctx->mpi_communicator);
+
+    /*
+    MPI_DB_PRINT("[PS BOUNDING BOX]: ");
+    for(size_t d = 0; d < ps -> dims; ++d) MPI_DB_PRINT("d%d:[%lf, %lf] ",(int)d,
+    lb[d], ub[d]); MPI_DB_PRINT("\n");
+    */
+
+    #undef lb
+    #undef ub
+}
+
 void compute_bounding_box_pointset(global_context_t *ctx, pointset_t *ps) {
-    #define local_data ps->data
+    #define local_data ps->datapoints
     #define lb ps->lb_box
     #define ub ps->ub_box
 
@@ -302,8 +371,8 @@ void compute_bounding_box_pointset(global_context_t *ctx, pointset_t *ps) {
         {
             for (size_t d = 0; d < ps->dims; ++d) 
             {
-                pvt_lb[d] = MIN(local_data[i * ps->dims + d], pvt_lb[d]);
-                pvt_ub[d] = MAX(local_data[i * ps->dims + d], pvt_ub[d]);
+                pvt_lb[d] = MIN(local_data[i].data[d], pvt_lb[d]);
+                pvt_ub[d] = MAX(local_data[i].data[d], pvt_ub[d]);
             }
         }
 
@@ -327,13 +396,9 @@ void compute_bounding_box_pointset(global_context_t *ctx, pointset_t *ps) {
     MPI_Allreduce(MPI_IN_PLACE, lb, ps->dims, MPI_MY_FLOAT, MPI_MIN, ctx->mpi_communicator);
     MPI_Allreduce(MPI_IN_PLACE, ub, ps->dims, MPI_MY_FLOAT, MPI_MAX, ctx->mpi_communicator);
 
-    /*
     MPI_DB_PRINT("[PS BOUNDING BOX]: ");
     for(size_t d = 0; d < ps -> dims; ++d) MPI_DB_PRINT("d%d:[%lf, %lf] ",(int)d,
     lb[d], ub[d]); MPI_DB_PRINT("\n");
-    */
-
-
 
     #undef local_data
     #undef lb
@@ -385,9 +450,7 @@ guess_t retrieve_guess_pure(global_context_t *ctx, pointset_t *ps,
     float_t x_guess = (pc - y0) / (y1 - y0) * (x1 - x0) + x0;
 
         
-    /*
     MPI_DB_PRINT("[MASTER] best guess @ %lf is %lf on bin %d on dimension %d --- x0 %lf x1 %lf y0 %lf y1 %lf\n",pc, x_guess,idx, d, x0, x1, y0, y1);
-    */
 
     guess_t g = {.bin_idx = idx, .x_guess = x_guess};
     return g;
@@ -436,11 +499,9 @@ void compute_pure_global_binning(global_context_t *ctx, pointset_t *ps,
         global_bin_counts[k] = 0;
     }
 
-    /*
-    MPI_DB_PRINT("[PS BOUNDING BOX %d]: ", ctx -> mpi_rank);
-    for(size_t d = 0; d < ps -> dims; ++d) MPI_DB_PRINT("d%d:[%lf, %lf] ",(int)d, ps -> lb_box[d], ps -> ub_box[d]); MPI_DB_PRINT("\n");
-    MPI_DB_PRINT("\n");
-    */
+    // MPI_DB_PRINT("[PS BOUNDING BOX %d]: ", ctx -> mpi_rank);
+    // for(size_t d = 0; d < ps -> dims; ++d) MPI_DB_PRINT("d%d:[%lf, %lf] ",(int)d, ps -> lb_box[d], ps -> ub_box[d]); MPI_DB_PRINT("\n");
+    // MPI_DB_PRINT("\n");
 
     float_t bin_w = (ps-> ub_box[d] - ps->lb_box[d]) / (float_t)k_global;
 
@@ -450,7 +511,7 @@ void compute_pure_global_binning(global_context_t *ctx, pointset_t *ps,
     #pragma omp parallel for
     for (size_t i = 0; i < ps->n_points; ++i) 
     {
-        float_t p = ps->data[i * ps->dims + d];
+        float_t p = ps->datapoints[i].data[d];
         /* to prevent the border point in the box to have bin_idx == k_global causing invalid memory access */
         int bin_idx = MIN((int)((p - ps->lb_box[d]) / bin_w), k_global - 1);
         
@@ -459,11 +520,15 @@ void compute_pure_global_binning(global_context_t *ctx, pointset_t *ps,
     }
 
     MPI_Allreduce(local_bin_count, global_bin_counts, k_global, MPI_UNSIGNED_LONG, MPI_SUM, ctx->mpi_communicator);
+    MPI_DB_PRINT("BIN COUNT: [ ");
+    for(int i = 0; i < k_global; ++i) MPI_DB_PRINT(" %lu ", local_bin_count[i]);
+    MPI_DB_PRINT(" ]\n");
+         
     //free(local_bin_count);
 }
 
 
-size_t partition_data_around_value(float_t *array, size_t vec_len, size_t compare_dim,
+size_t partition_data_around_value(point_t *array, size_t vec_len, size_t compare_dim,
                                    size_t left, size_t right, float_t pivot_value) 
 {
     /*
@@ -477,9 +542,9 @@ size_t partition_data_around_value(float_t *array, size_t vec_len, size_t compar
     for (i = left; i < right; ++i) 
     {
         // if(compare_data_element(array + i*vec_len, array + pivot_index*vec_len, compare_dim ) >= 0){
-        if (array[i * vec_len + compare_dim] < pivot_value) 
+        if (array[i].data[compare_dim] < pivot_value) 
         {
-            swap_data_element(array + store_index * vec_len, array + i * vec_len, vec_len);
+            swap_data_element(array + store_index, array + i, vec_len);
             store_index += 1;
         }
     }
@@ -489,78 +554,6 @@ size_t partition_data_around_value(float_t *array, size_t vec_len, size_t compar
 
     return store_index; 
 }
-
-size_t parallel_partition_data_around_value(partition_utils_t* p_utils, float_t* in, 
-                                            float_t* out, size_t vec_len, size_t compare_dim,
-                                            size_t left, size_t right, float_t pivot_value) 
-{
-    /*
-    * returns the number of elements less than the pivot
-    */
-    size_t store_index = left;
-    
-    int num_threads = omp_get_num_threads();
-    size_t total_lt_count = 0;
-
-    // init to 0 the count and displs
-    for(int i=0; i<num_threads;++i)
-    {
-        p_utils->lt_count[i]=0;
-        p_utils->gt_count[i]=0;
-        p_utils->gt_displ[i]=0;
-        p_utils->lt_displ[i]=0;
-    }
-
-    #pragma omp parallel
-    {
-        int thread_id = omp_get_thread_num();
-
-        #pragma omp for schedule(static, 128)
-        for(size_t i=left; i<right; ++i)
-        {
-            bool is_less_than_pivot = in[i*vec_len + compare_dim] < pivot_value;
-            p_utils->lt_count[thread_id] +=  is_less_than_pivot;
-            p_utils->gt_count[thread_id] += !is_less_than_pivot;
-        }
-
-        // exclusive prefix sum (starting from 0)
-        // displacements should include the offest on the left
-        #pragma omp single
-        total_lt_count += p_utils->lt_count[0];
-        for(int th=1; th<num_threads; ++th)
-        {
-            total_lt_count += p_utils->lt_count[th];
-            p_utils->lt_displ[th] = left + p_utils->lt_count[th-1] + p_utils->lt_displ[th-1]; 
-            p_utils->gt_displ[th] = left + p_utils->gt_count[th-1] + p_utils->gt_displ[th-1]; 
-        }
-
-        #pragma omp barrier
-
-        idx_t thread_lt_count = 0;
-        idx_t thread_gt_count = 0;
-
-        #pragma omp for schedule(static, 128)
-        for(size_t i=left; i<right; ++i)
-        {
-            idx_t target_idx = 0;
-            bool is_less_than_pivot = in[i*vec_len + compare_dim] < pivot_value;
-            if(is_less_than_pivot) 
-            {
-                target_idx = p_utils->lt_displ[thread_id] + thread_lt_count;
-                thread_lt_count++;
-            }
-            else 
-            {
-                target_idx = total_lt_count + p_utils->gt_displ[thread_id] + thread_gt_count;
-                thread_gt_count++;
-            }
-            memcpy(in + i*vec_len, out + target_idx*vec_len, vec_len*sizeof(float_t));
-        }
-    }
-    
-    return store_index + total_lt_count; 
-}
-
 
 
 guess_t refine_pure_binning(global_context_t *ctx, pointset_t *ps,
@@ -616,40 +609,33 @@ guess_t refine_pure_binning(global_context_t *ctx, pointset_t *ps,
          * */
 
         
-        /*
         MPI_DB_PRINT("---- ---- ----\n");
         MPI_DB_PRINT("[MASTER] Refining on bin %d lb %lf ub %lf starting c %lf %lf\n", 
                 best_guess.bin_idx, bin_lb, bin_ub, starting_cumulative/total_count,
                 (tmp_global_bins[best_guess.bin_idx] + starting_cumulative)/total_count);
-        */
     
 
         for (int i = 0; i < k_global; ++i)  tmp_global_bins[i] = 0;
 
         pointset_t tmp_ps;
 
-        int end_idx   = partition_data_around_value(ps->data, (int)ps->dims, d, 0, (int)ps->n_points, bin_ub);
-        int start_idx = partition_data_around_value(ps->data, (int)ps->dims, d, 0,end_idx, bin_lb);
+        int end_idx   = partition_data_around_value(ps->datapoints, (int)ps->dims, d, 0, (int)ps->n_points, bin_ub);
+        int start_idx = partition_data_around_value(ps->datapoints, (int)ps->dims, d, 0, end_idx, bin_lb);
 
         tmp_ps.n_points = end_idx - start_idx;
-        tmp_ps.data = ps->data + start_idx * ps->dims;
+        tmp_ps.datapoints = ps->datapoints + start_idx;
         tmp_ps.dims = ps->dims;
         tmp_ps.lb_box = (float_t*)MY_MALLOC(ctx -> dims * sizeof(float_t));
         tmp_ps.ub_box = (float_t*)MY_MALLOC(ctx -> dims * sizeof(float_t));
 
         compute_bounding_box_pointset(ctx, &tmp_ps);
 
-        /*
-        MPI_DB_PRINT("[MASTER] searching for %lf of the bin considered\n",ff);
-        */
+        MPI_DB_PRINT("[MASTER] searching for %lf of the bin considered start_idx %d end_idx %d\n",
+                     ff, start_idx, end_idx);
 
         // DB_PRINT("%lu\n",tmp_ps.n_points );
         MPI_Barrier(ctx->mpi_communicator);
         compute_pure_global_binning(ctx, &tmp_ps, tmp_global_bins, k_global, d);
-
-        /* sum to global bins */
-        // for(int i = 0; i < k_global; ++i) tmp_global_bins[i] +=
-        // starting_cumulative;
 
         best_guess = retrieve_guess_pure(ctx, &tmp_ps, tmp_global_bins, k_global, d, ff);
 
@@ -688,7 +674,7 @@ void free_queue(partition_queue_t *pq) { free(pq->data); }
 void get_pointset_from_partition(pointset_t *ps, partition_t *part) 
 {
     ps->n_points  = part->n_points;
-    ps->data      = part->base_ptr;
+    ps->datapoints= part->base_ptr;
     ps->n_points  = part->n_points;
 }
 
@@ -857,218 +843,211 @@ void tree_print_leaves(global_context_t* ctx, top_kdtree_node_t* root)
     if(root -> rch) tree_print_leaves(ctx, root -> rch);
 }
 
-void parallel_build_top_kdtree(global_context_t *ctx, pointset_t *og_pointset, top_kdtree_t *tree, idx_t n_bins, float_t tolerance) 
+top_kdtree_node_t* transfer_tree(global_context_t* ctx, pivot_t local_node, kdtree_t* mini_local_tree, top_kdtree_t* top_tree, 
+                                 top_kdtree_node_t* parent, int left_or_right)
 {
+    
+    top_kdtree_node_t* current_node = top_tree_generate_node(ctx, top_tree);
 
-    // NOTE: For the me of the future
-    // pointsests are only "helper structs" partitions 
-    size_t tot_n_points = 0;
-    MPI_Allreduce(&(og_pointset->n_points), &tot_n_points, 1, MPI_UINT64_T, MPI_SUM, ctx->mpi_communicator);
-
-    /*
-    MPI_DB_PRINT("[MASTER] Top tree builder invoked\n");
-    */
-    MPI_DB_PRINT("\n");
-    MPI_DB_PRINT("Building top tree on %lu points with %d processors\n", tot_n_points, ctx->world_size);
-    MPI_DB_PRINT("\n");
-
-    size_t current_partition_n_points = tot_n_points;
-    size_t expected_points_per_node = tot_n_points / ctx->world_size;
-
-    /* enqueue the two partitions */
-
-    compute_bounding_box_pointset(ctx, og_pointset);
-
-    partition_queue_t queue;
-    init_queue(&queue);
-
-    int selected_dim = 0;
-    partition_t current_partition = {  .d          = selected_dim,
-                                       .base_ptr   = og_pointset->data,
-                                       .n_points   = og_pointset->n_points,
-                                       .n_procs    = ctx->world_size,
-                                       .parent     = NULL,
-                                       .lr         = NO_CHILD };
-
-    enqueue_partition(&queue, current_partition);
-
-    // this struct holds the current slice of points
-    pointset_t current_pointset;
-    //current_pointset.lb_box = (float_t*)MY_MALLOC(ctx -> dims * sizeof(float_t));
-    //current_pointset.ub_box = (float_t*)MY_MALLOC(ctx -> dims * sizeof(float_t));
-
-    while (queue.count) 
+    switch (left_or_right)
     {
-        /*dequeue the partition to process */
-        current_partition = dequeue_partition(&queue);
+        case TOP_TREE_LCH:
+            {
+                current_node -> parent        = parent;
+                current_node -> parent -> lch = current_node;
+                /* compute the box */
 
-        /* generate e pointset for that partition */
+                /*
+                * left child has lb equal to parent
+                * ub equal to parent except for the dim of splitting 
+                */
+                int parent_split_dim = current_node -> parent -> split_dim;
+                float_t parent_hp    = current_node -> parent -> split_val;
 
-        get_pointset_from_partition(&current_pointset, &current_partition);
-        current_pointset.dims = ctx->dims;
+                memcpy(current_node -> lb_node_box, current_node -> parent -> lb_node_box, ctx -> dims * sizeof(float_t));
+                memcpy(current_node -> ub_node_box, current_node -> parent -> ub_node_box, ctx -> dims * sizeof(float_t));
 
+                current_node -> ub_node_box[parent_split_dim] = parent_hp;
+            }
+            break;
 
-        top_kdtree_node_t* current_node  = top_tree_generate_node(ctx, tree);
-        /* insert node */
-        
-        // MPI_DB_PRINT(   "[RANK %d] Handling partition:\n"\
-        //                 "    current_node %p,\n"\
-        //                 "    dim %d,\n"\
-        //                 "    n_points %lu,\n"\
-        //                 "    start_proc %d,\n"\
-        //                 "    n_procs %d\n"\
-        //                 "    parent %p\n"\
-        //                 "    base_ptr %p\n"\
-        //                 "    lr %d\n", 
-        //         ctx -> mpi_rank,
-        //         current_node,
-        //         current_partition.d,
-        //         current_partition.n_points,
-        //         current_partition.start_proc,
-        //         current_partition.n_procs,
-        //         current_partition.parent,
-        //         current_partition.base_ptr,
-        //         current_partition.lr);
+        case TOP_TREE_RCH:
+            {
+                current_node -> parent        = parent;
+                current_node -> parent -> rch = current_node;
 
-        /*generate a tree node and point the bounding box to the pointset */
-        switch (current_partition.lr) {
-            case TOP_TREE_LCH:
-                if(current_partition.parent)
-                {
-                    current_node -> parent        = current_partition.parent;
-                    current_node -> parent -> lch = current_node;
-                    /* compute the box */
-                    /*
-                     * left child has lb equal to parent
-                     * ub equal to parent except for the dim of splitting 
-                     */
-                    int parent_split_dim = current_node -> parent -> split_dim;
-                    float_t parent_hp    = current_node -> parent -> split_val;
+                int parent_split_dim = current_node -> parent -> split_dim;
+                float_t parent_hp    = current_node -> parent -> split_val;
 
-                    memcpy(current_node -> lb_node_box, current_node -> parent -> lb_node_box, ctx -> dims * sizeof(float_t));
-                    memcpy(current_node -> ub_node_box, current_node -> parent -> ub_node_box, ctx -> dims * sizeof(float_t));
+                /*
+                * right child has ub equal to parent
+                * lb equal to parent except for the dim of splitting 
+                */
 
+                memcpy(current_node -> lb_node_box, current_node -> parent -> lb_node_box, ctx -> dims * sizeof(float_t));
+                memcpy(current_node -> ub_node_box, current_node -> parent -> ub_node_box, ctx -> dims * sizeof(float_t));
 
-                    current_node -> ub_node_box[parent_split_dim] = parent_hp;
-                }
-                break;
-
-            case TOP_TREE_RCH:
-                if(current_partition.parent)
-                {
-                    current_node -> parent        = current_partition.parent;
-                    current_node -> parent -> rch = current_node;
-
-                    int parent_split_dim = current_node -> parent -> split_dim;
-                    float_t parent_hp    = current_node -> parent -> split_val;
-
-                    /*
-                     * right child has ub equal to parent
-                     * lb equal to parent except for the dim of splitting 
-                     */
-
-                    memcpy(current_node -> lb_node_box, current_node -> parent -> lb_node_box, ctx -> dims * sizeof(float_t));
-                    memcpy(current_node -> ub_node_box, current_node -> parent -> ub_node_box, ctx -> dims * sizeof(float_t));
-
-                    current_node -> lb_node_box[parent_split_dim] = parent_hp;
-                }
-                break;
-            case NO_CHILD:
-                {
-                    tree -> root = current_node;
-                    memcpy(current_node -> lb_node_box, og_pointset -> lb_box, ctx -> dims * sizeof(float_t));
-                    memcpy(current_node -> ub_node_box, og_pointset -> ub_box, ctx -> dims * sizeof(float_t));
-                }
-                break;
-        }
-
-        current_node -> split_dim = current_partition.d;
-        current_node -> parent = current_partition.parent;
-        current_node -> lch = NULL;
-        current_node -> rch = NULL;
-
-        current_pointset.lb_box = current_node->lb_node_box;
-        current_pointset.ub_box = current_node->ub_node_box;
-
-        MPI_Barrier(ctx -> mpi_communicator);
-        /* handle partition */
-        if(current_partition.n_procs > 1)
-        {
-            float_t fraction = (current_partition.n_procs / 2) / (float_t)current_partition.n_procs;
-            guess_t g = compute_median_pure_binning(ctx, &current_pointset, fraction, current_partition.d, n_bins, tolerance);
-            size_t pv = partition_data_around_value(current_pointset.data, ctx->dims, current_partition.d, 0, current_pointset.n_points, g.x_guess);
-
-            current_node -> split_val = g.x_guess;
-
-            size_t points_left = (size_t)pv;
-            size_t points_right = current_partition.n_points - points_left;
-
-            int procs_left = current_partition.n_procs * fraction;
-            int procs_right = current_partition.n_procs - procs_left;
-
-
-            // MPI_DB_PRINT("Chosing as guess: %lf, seareching for %lf, obtained %lf\n", g.x_guess, fraction, g.ep);
-            // MPI_DB_PRINT("-------------------\n\n");
-    
-
-
-            int next_dimension = (++selected_dim) % (ctx->dims);
-            partition_t left_partition = {
-                .n_points     = points_left, 
-                .n_procs      = procs_left,
-                .start_proc   = current_partition.start_proc,
-                .parent       = current_node,
-                .lr           = TOP_TREE_LCH,
-                .base_ptr     = current_pointset.data,
-                .d            = next_dimension,
-            };
-
-            partition_t right_partition = {
-                .n_points     = points_right, 
-                .n_procs      = procs_right,
-                .start_proc   = current_partition.start_proc + procs_left,
-                .parent       = current_node,
-                .lr           = TOP_TREE_RCH,
-                .base_ptr     = current_pointset.data + pv * current_pointset.dims,
-                .d            = next_dimension
-            };
-
-            enqueue_partition(&queue, left_partition);
-            enqueue_partition(&queue, right_partition);
-        }
-        else
-        {
-            current_node -> owner = current_partition.start_proc;
-        }
+                current_node -> lb_node_box[parent_split_dim] = parent_hp;
+            }
+            break;
+        case NO_CHILD:
+            {
+                compute_bounding_box_data(ctx, ctx->local_data, current_node->lb_node_box, current_node->ub_node_box, ctx->local_n_points);
+            }
+            break;
+        default:
+            break;
     }
-    tree -> root = tree -> _nodes;
 
-    #if defined(WRITE_TOP_NODES)
-    MPI_DB_PRINT("Root is %p\n", tree -> root);
-        if(I_AM_MASTER)
-        {
-            tree_print(ctx, tree -> root);
-            write_nodes_to_file(ctx, tree, "bb/top_nodes.csv");
-        }
-    #endif
+    // if(I_AM_MASTER)
+    // {
+    //     printf("Processing node\n");
+    //     pivot_print(local_node, 0, ctx->dims);
+    // }
 
-    
-    //free(current_pointset.lb_box);
-    //free(current_pointset.ub_box);
-    free_queue(&queue);
+    if(local_node.is_leaf)
+    {
+        current_node->owner = local_node.as.leaf.leaf_point_count;
+    }
+    else 
+    {
+        current_node->split_dim = local_node.as.internal.split_variable;
+        current_node->split_val = local_node.as.internal.split_value;
 
+        idx_t lch_idx = local_node.as.internal.lch_idx;
+        current_node->lch = transfer_tree(ctx, mini_local_tree->__pivots[lch_idx], mini_local_tree, 
+                                          top_tree, current_node, TOP_TREE_LCH);
+
+        idx_t rch_idx = local_node.as.internal.rch_idx;
+        current_node->rch = transfer_tree(ctx, mini_local_tree->__pivots[rch_idx], mini_local_tree, 
+                                          top_tree, current_node, TOP_TREE_RCH);
+    }
+
+    return current_node;
 }
 
-void build_top_kdtree(global_context_t *ctx, pointset_t *og_pointset, top_kdtree_t *tree, idx_t n_bins, float_t tolerance) 
+void parallel_build_top_kdtree(global_context_t *ctx, top_kdtree_t *tree, float_t tolerance, idx_t oversampling) 
 {
+    TIME_DEF;
+    TIME_START;
+    //initializing og_indexes
+    // size_t tot_n_points = 0;
+    // MPI_Allreduce(&(ctx->local_n_points), &tot_n_points, 1, MPI_UINT64_T, MPI_SUM, ctx->mpi_communicator);
+
+    MPI_Alltoall(&(ctx->local_n_points), 1, MPI_UINT64_T, ctx->rank_n_points, 1, MPI_UINT64_T, ctx->mpi_communicator);
+
+    ctx->rank_idx_start[0] = 0;
+    for(int i = 1; i < ctx->world_size; ++i)
+    {
+        ctx->rank_idx_start[i] = ctx->rank_idx_start[i-1] + ctx->rank_n_points[i-1];
+    }
+
+    ctx -> og_idxs = (idx_t*)MY_MALLOC(ctx->local_n_points * sizeof(idx_t));
+    for(idx_t i = 0; i < ctx->local_n_points; ++i)
+    {
+        ctx -> og_idxs[i] = i + ctx->rank_idx_start[ctx->mpi_rank];
+    }
+
+    // select a subset of points by sampling
+    
+    idx_t n_levels = (idx_t)ceil(log2(ctx -> world_size)) + 1;
+    idx_t local_sampled_points = ((1 << n_levels) - 1) * oversampling;
+    idx_t total_sampled_points   = local_sampled_points * ctx->world_size; 
+    float_t* points_chosen = (float_t*)MY_MALLOC(total_sampled_points * ctx->dims * sizeof(float_t));
+
+    idx_t start_idx = ctx->mpi_rank * local_sampled_points;
+    #pragma omp parallel
+    {
+        // 1. Initialize a private state for this specific thread
+        unsigned short state[3];
+        int tid = omp_get_thread_num();
+        
+        // Seed using thread ID and a base seed to ensure different sequences
+        state[0] = (unsigned short)tid;
+        state[1] = (unsigned short)(tid ^ time(NULL));
+        state[2] = (unsigned short)(tid >> 16);
+
+        // 2. Distribute the loop iterations among threads
+        #pragma omp for
+        for(idx_t i = 0; i < local_sampled_points; ++i)
+        {
+            // 3. Use the reentrant erand48 with the private state
+            // erand48 returns a double [0.0, 1.0)
+            double r = erand48(state);
+            idx_t sampled_idx = (idx_t)(r * ctx->local_n_points);
+
+            // 4. Copy the data (Memory layout remains the same)
+            memcpy(points_chosen + (start_idx + i) * ctx->dims, 
+                ctx->local_data + (sampled_idx) * ctx->dims, 
+                ctx->dims * sizeof(float_t));
+        }
+    }
+    float_t elapsed = TIME_STOP;
+    LOG_WRITE("Sampling", elapsed);
+
+    // it SHOULD be deterministic
+    
+    TIME_START;
+    MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, 
+                  points_chosen, local_sampled_points * ctx->dims, MPI_MY_FLOAT, 
+                  ctx->mpi_communicator);
+
+    MPI_DB_PRINT("Sampling %lu points\n", total_sampled_points);
+    kdtree_t mini_tree = {0};
+    kdtree_initialize(&mini_tree, points_chosen, total_sampled_points, ctx->dims);
+    mini_tree.root = parallel_make_tree_w_ranks(mini_tree.__points, mini_tree.__pivots, 0, -1, 0, 
+                                                mini_tree.n_points-1, 0, mini_tree.dims, 0, ctx->world_size - 1);
+
+
+    elapsed = TIME_STOP;
+    LOG_WRITE("Building top tree", elapsed);
+    // if(I_AM_MASTER)
+    // {
+    //     kdtree_print(&mini_tree);
+    // }
+    TIME_START;
+    tree->root = transfer_tree(ctx, mini_tree.__pivots[mini_tree.root], 
+                                &mini_tree, tree, NULL, NO_CHILD);
+    elapsed = TIME_STOP;
+    LOG_WRITE("Transfering Tree", elapsed);
+
+    kdtree_free(&mini_tree);
+}
+
+
+void build_top_kdtree(global_context_t *ctx, top_kdtree_t *tree, idx_t n_bins, float_t tolerance) 
+{
+
 
     // NOTE: For the me of the future
     // pointsests are only "helper structs" partitions 
+
+    //initializing og_indexes
     size_t tot_n_points = 0;
-    MPI_Allreduce(&(og_pointset->n_points), &tot_n_points, 1, MPI_UINT64_T, MPI_SUM, ctx->mpi_communicator);
+    MPI_Allreduce(&(ctx->local_n_points), &tot_n_points, 1, MPI_UINT64_T, MPI_SUM, ctx->mpi_communicator);
 
+    MPI_Alltoall(&(ctx->local_n_points), 1, MPI_UINT64_T, ctx->rank_n_points, 1, MPI_UINT64_T, ctx->mpi_communicator);
 
+    ctx->rank_idx_start[0] = 0;
+    for(int i = 1; i < ctx->world_size; ++i)
+    {
+        ctx->rank_idx_start[i] = ctx->rank_idx_start[i-1] + ctx->rank_n_points[i-1];
+    }
 
+    point_t *data_w_idx = (point_t*)MY_MALLOC(ctx->local_n_points * sizeof(point_t));    
+    for(idx_t i = 0; i < ctx->local_n_points; ++i)
+    {
+        data_w_idx[i].array_idx = i + ctx->rank_idx_start[ctx->mpi_rank];
+        data_w_idx[i].data      = ctx->local_data + i * ctx->dims;
+    }
+
+    pointset_t og_pointset;
+    og_pointset.datapoints = data_w_idx;
+    og_pointset.dims = ctx->dims;
+    og_pointset.n_points = ctx->local_n_points;
+    og_pointset.lb_box = (float_t*)MY_MALLOC(ctx -> dims * sizeof(float_t));
+    og_pointset.ub_box = (float_t*)MY_MALLOC(ctx -> dims * sizeof(float_t));
+    
     /*
     MPI_DB_PRINT("[MASTER] Top tree builder invoked\n");
     */
@@ -1081,15 +1060,15 @@ void build_top_kdtree(global_context_t *ctx, pointset_t *og_pointset, top_kdtree
 
     /* enqueue the two partitions */
 
-    compute_bounding_box_pointset(ctx, og_pointset);
+    compute_bounding_box_pointset(ctx, &og_pointset);
 
     partition_queue_t queue;
     init_queue(&queue);
 
     int selected_dim = 0;
     partition_t current_partition = {  .d          = selected_dim,
-                                       .base_ptr   = og_pointset->data,
-                                       .n_points   = og_pointset->n_points,
+                                       .base_ptr   = og_pointset.datapoints,
+                                       .n_points   = og_pointset.n_points,
                                        .n_procs    = ctx->world_size,
                                        .parent     = NULL,
                                        .lr         = NO_CHILD };
@@ -1112,24 +1091,24 @@ void build_top_kdtree(global_context_t *ctx, pointset_t *og_pointset, top_kdtree
         top_kdtree_node_t* current_node  = top_tree_generate_node(ctx, tree);
         /* insert node */
         
-        // MPI_DB_PRINT(   "[RANK %d] Handling partition:\n"\
-        //                 "    current_node %p,\n"\
-        //                 "    dim %d,\n"\
-        //                 "    n_points %lu,\n"\
-        //                 "    start_proc %d,\n"\
-        //                 "    n_procs %d\n"\
-        //                 "    parent %p\n"\
-        //                 "    base_ptr %p\n"\
-        //                 "    lr %d\n", 
-        //         ctx -> mpi_rank,
-        //         current_node,
-        //         current_partition.d,
-        //         current_partition.n_points,
-        //         current_partition.start_proc,
-        //         current_partition.n_procs,
-        //         current_partition.parent,
-        //         current_partition.base_ptr,
-        //         current_partition.lr);
+        MPI_DB_PRINT(   "[RANK %d] Handling partition:\n"\
+                        "    current_node %p,\n"\
+                        "    dim %d,\n"\
+                        "    n_points %lu,\n"\
+                        "    start_proc %d,\n"\
+                        "    n_procs %d\n"\
+                        "    parent %p\n"\
+                        "    base_ptr %p\n"\
+                        "    lr %d\n", 
+                ctx -> mpi_rank,
+                current_node,
+                current_partition.d,
+                current_partition.n_points,
+                current_partition.start_proc,
+                current_partition.n_procs,
+                current_partition.parent,
+                current_partition.base_ptr,
+                current_partition.lr);
 
         switch (current_partition.lr) {
             case TOP_TREE_LCH:
@@ -1175,8 +1154,8 @@ void build_top_kdtree(global_context_t *ctx, pointset_t *og_pointset, top_kdtree
             case NO_CHILD:
                 {
                     tree -> root = current_node;
-                    memcpy(current_node -> lb_node_box, og_pointset -> lb_box, ctx -> dims * sizeof(float_t));
-                    memcpy(current_node -> ub_node_box, og_pointset -> ub_box, ctx -> dims * sizeof(float_t));
+                    memcpy(current_node -> lb_node_box, og_pointset.lb_box, ctx -> dims * sizeof(float_t));
+                    memcpy(current_node -> ub_node_box, og_pointset.ub_box, ctx -> dims * sizeof(float_t));
                 }
                 break;
         }
@@ -1195,7 +1174,7 @@ void build_top_kdtree(global_context_t *ctx, pointset_t *og_pointset, top_kdtree
         {
             float_t fraction = (current_partition.n_procs / 2) / (float_t)current_partition.n_procs;
             guess_t g = compute_median_pure_binning(ctx, &current_pointset, fraction, current_partition.d, n_bins, tolerance);
-            size_t pv = partition_data_around_value(current_pointset.data, ctx->dims, current_partition.d, 0, current_pointset.n_points, g.x_guess);
+            size_t pv = partition_data_around_value(current_pointset.datapoints, ctx->dims, current_partition.d, 0, current_pointset.n_points, g.x_guess);
 
             current_node -> split_val = g.x_guess;
 
@@ -1206,8 +1185,8 @@ void build_top_kdtree(global_context_t *ctx, pointset_t *og_pointset, top_kdtree
             int procs_right = current_partition.n_procs - procs_left;
 
 
-            // MPI_DB_PRINT("Chosing as guess: %lf, seareching for %lf, obtained %lf\n", g.x_guess, fraction, g.ep);
-            // MPI_DB_PRINT("-------------------\n\n");
+            MPI_DB_PRINT("Chosing as guess: %lf, seareching for %lf, obtained %lf\n", g.x_guess, fraction, g.ep);
+            MPI_DB_PRINT("-------------------\n\n");
     
 
 
@@ -1231,7 +1210,7 @@ void build_top_kdtree(global_context_t *ctx, pointset_t *og_pointset, top_kdtree
                 .start_proc   = current_partition.start_proc,
                 .parent       = current_node,
                 .lr           = TOP_TREE_LCH,
-                .base_ptr     = current_pointset.data,
+                .base_ptr     = current_pointset.datapoints,
                 .d            = next_dimension,
             };
 
@@ -1241,7 +1220,7 @@ void build_top_kdtree(global_context_t *ctx, pointset_t *og_pointset, top_kdtree
                 .start_proc   = current_partition.start_proc + procs_left,
                 .parent       = current_node,
                 .lr           = TOP_TREE_RCH,
-                .base_ptr     = current_pointset.data + pv * current_pointset.dims,
+                .base_ptr     = current_pointset.datapoints + pv,
                 .d            = next_dimension
             };
 
@@ -1264,8 +1243,16 @@ void build_top_kdtree(global_context_t *ctx, pointset_t *og_pointset, top_kdtree
         }
     #endif
 
+    ctx -> og_idxs = (idx_t*)MY_MALLOC(ctx->local_n_points * sizeof(idx_t));
+    for(idx_t i = 0; i < ctx->local_n_points; ++i)
+    {
+        ctx -> og_idxs[i] = data_w_idx[i].array_idx;
+    }
+
     
     free_queue(&queue);
+    og_pointset.datapoints = NULL;
+    free_pointset(&og_pointset);
 
 }
 
@@ -1299,8 +1286,22 @@ int compute_point_owner(global_context_t* ctx, top_kdtree_t* tree, float_t* data
     return owner;
 }
 
+void swap_data_vec_and_idx(float_t *a, float_t *b, idx_t* idx_a, idx_t* idx_b, size_t vec_len) {
+    idx_t tmp_idx = *idx_a;
+    *idx_a = *idx_b;
+    *idx_b = tmp_idx;
+
+    float_t tmp;
+    for (size_t i = 0; i < vec_len; ++i) 
+    {
+        tmp = a[i];
+        a[i] = b[i];
+        b[i] = tmp;
+    }
+}
+
 /* to partition points around owners */
-int partition_data_around_key(int* key, float_t *val, int vec_len, int ref_key , int left, int right) 
+int partition_data_around_key(int* key, float_t *values, idx_t* idxs, int vec_len, int ref_key , int left, int right) 
 {
     /*
     * returns the number of elements less than the pivot
@@ -1313,7 +1314,8 @@ int partition_data_around_key(int* key, float_t *val, int vec_len, int ref_key ,
         // if(compare_data_element(array + i*vec_len, array + pivot_index*vec_len, compare_dim ) >= 0){
         if (key[i] < ref_key) 
         {
-            swap_data_element(val + store_index * vec_len, val + i * vec_len, vec_len);
+            swap_data_vec_and_idx(values + store_index * vec_len, values + i * vec_len, 
+                                  idxs + store_index, idxs + i, vec_len);
             /* swap keys */
             int tmp = key[i];
             key[i] = key[store_index];
@@ -1330,19 +1332,23 @@ int partition_data_around_key(int* key, float_t *val, int vec_len, int ref_key ,
 
 void exchange_points(global_context_t* ctx, top_kdtree_t* tree)
 {
+    TIME_DEF
     int* points_per_proc  = (int*)MY_MALLOC(ctx -> world_size * sizeof(int));    
     int* points_owners    = (int*)MY_MALLOC(ctx -> dims * ctx -> local_n_points * sizeof(float_t));
     int* partition_offset = (int*)MY_MALLOC(ctx -> world_size * sizeof(int));    
 
     /* compute owner */
+    TIME_START;
     #pragma omp parallel for
     for(size_t i = 0; i < ctx -> local_n_points; ++i)
     {
         /* tree walk */
         points_owners[i] = compute_point_owner(ctx, tree, ctx -> local_data + (i * ctx -> dims));
     }
-        
-    
+    float_t elapsed = TIME_STOP;
+    LOG_WRITE("Compute owners", elapsed);
+    TIME_START;
+
     int last_idx = 0;
     int len      = ctx -> local_n_points;
     float_t* curr_data = ctx -> local_data;
@@ -1350,14 +1356,18 @@ void exchange_points(global_context_t* ctx, top_kdtree_t* tree)
     partition_offset[0] = 0;
     for(int owner = 1; owner < ctx -> world_size; ++owner)
     {
-        last_idx = partition_data_around_key(points_owners, ctx -> local_data, ctx -> dims, owner, last_idx, ctx -> local_n_points);    
+        last_idx = partition_data_around_key(points_owners, ctx -> local_data, ctx -> og_idxs, ctx -> dims, owner, last_idx, ctx -> local_n_points);    
         partition_offset[owner] = last_idx;
         points_per_proc[owner - 1] = last_idx;
     }
+    elapsed = TIME_STOP;
+    LOG_WRITE("Partition", elapsed);
 
+    // copy ordered 
+
+    TIME_START;
     points_per_proc[ctx -> world_size - 1] = ctx -> local_n_points;
-    
-    
+
     for(int i = ctx -> world_size - 1; i > 0; --i)
     {
         points_per_proc[i] = points_per_proc[i] - points_per_proc[i - 1];
@@ -1381,6 +1391,15 @@ void exchange_points(global_context_t* ctx, top_kdtree_t* tree)
         rcv_displs[i] = rcv_displs[i - 1] + rcv_count[i - 1];
         send_displs[i] = send_displs[i - 1] + send_count[i - 1];
     }
+
+    for(int i = 0; i < ctx -> world_size; ++i) tot_count += rcv_count[i];
+    idx_t* rcv_idxs = (idx_t*)MY_MALLOC(tot_count * sizeof(idx_t));
+    // exchange idxs
+    MPI_Alltoallv(  ctx -> og_idxs, send_count, send_displs, MPI_UINT64_T, 
+                    rcv_idxs, rcv_count, rcv_displs, MPI_UINT64_T, 
+                    ctx -> mpi_communicator);
+
+    tot_count = 0;
 
     /*multiply for number of elements */
     for(int i = 0; i < ctx -> world_size; ++i) 
@@ -1421,15 +1440,27 @@ void exchange_points(global_context_t* ctx, top_kdtree_t* tree)
     /* free prv pointer */
     free(ppp);
     free(ctx -> local_data);
+    free(ctx -> og_idxs);
     ctx -> local_data = rcvbuffer;
+    ctx -> og_idxs    = rcv_idxs; 
 
     /* check exchange */
     
-    for(size_t i = 0; i < ctx -> local_n_points; ++i)
-    {
-        int o = compute_point_owner(ctx, tree, ctx -> local_data + (i * ctx -> dims));
-        if(o != ctx -> mpi_rank) DB_PRINT("rank %d got an error\n",ctx -> mpi_rank);
-    }
+    #ifdef CHECK_CORRECT_EXCHANGE
+        for(size_t i = 0; i < ctx -> local_n_points; ++i)
+        {
+            int o = compute_point_owner(ctx, tree, ctx -> local_data + (i * ctx -> dims));
+            if(o != ctx -> mpi_rank) DB_PRINT("rank %d got an error\n",ctx -> mpi_rank);
+        }
+    #endif
+
+    elapsed = TIME_STOP;
+    LOG_WRITE("Exchange", elapsed);
+    
+    #ifdef PRINT_BALANCE_FACTOR
+        DB_PRINT("[RANK %d] balance factor %.4lf\n", ctx->mpi_rank, (float_t)ctx->local_n_points/ctx->n_points);
+    #endif
+    
 
     free(points_owners);
     free(points_per_proc);
@@ -1865,7 +1896,7 @@ void mpi_ngbh_search(global_context_t* ctx, datapoint_info_t* dp_info, top_kdtre
     }
     elapsed_time = TIME_STOP;
     LOG_WRITE("Local neighborhood search", elapsed_time);
-    printf("rank %d elapsed_time %lf\n", ctx->mpi_rank, elapsed_time);
+    //printf("rank %d elapsed_time %lf\n", ctx->mpi_rank, elapsed_time);
 
 
     TIME_START;

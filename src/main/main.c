@@ -341,13 +341,6 @@ void simulate_master_read_and_scatter(int dims, size_t n, global_context_t *ctx)
 
     uint64_t *global_bin_counts_int = (uint64_t *)MY_MALLOC(k_global * sizeof(uint64_t));
 
-    pointset_t original_ps;
-    original_ps.data = ctx->local_data;
-    original_ps.dims = ctx->dims;
-    original_ps.n_points = ctx->local_n_points;
-    original_ps.lb_box = (float_t*)MY_MALLOC(ctx -> dims * sizeof(float_t));
-    original_ps.ub_box = (float_t*)MY_MALLOC(ctx -> dims * sizeof(float_t));
-
 
     top_kdtree_t tree;
     TIME_START;
@@ -357,15 +350,20 @@ void simulate_master_read_and_scatter(int dims, size_t n, global_context_t *ctx)
 
     TIME_START;
     //build_top_kdtree(ctx, &original_ps, &tree, tol);
-    build_top_kdtree(ctx, &original_ps, &tree, k_global, tol);
+    build_top_kdtree(ctx, &tree, k_global, tol);
+    //parallel_build_top_kdtree(ctx, &tree, 0.001, 512);
+    elapsed_time = TIME_STOP;
+    LOG_WRITE("Top kdtree build", elapsed_time);
+
+    TIME_START;
     exchange_points(ctx, &tree);
     elapsed_time = TIME_STOP;
-
-//#ifdef WRITE_SHUFFLED_DATA
-    distributed_buffer_to_file(ctx, ctx->local_data, 5*sizeof(float_t), ctx->local_n_points, "bb/ordered_data");
-//#endif
-
     LOG_WRITE("Top kdtree build and domain decomposition", elapsed_time);
+
+#ifdef WRITE_SHUFFLED_DATA
+    distributed_buffer_to_file(ctx, ctx->local_data, 5*sizeof(float_t), ctx->local_n_points, "bb/ordered_data");
+#endif
+
     TIME_START;
     kdtree_t local_tree;
     kdtree_initialize( &local_tree, ctx -> local_data, ctx -> local_n_points, (unsigned int)ctx -> dims);
@@ -400,13 +398,10 @@ void simulate_master_read_and_scatter(int dims, size_t n, global_context_t *ctx)
 
     top_tree_free(ctx, &tree);
     kdtree_free(&local_tree);
-    //clusters_free(&clusters);
 
     free(send_counts);
     free(displacements);
     //free(dp_info);
     
-    original_ps.data = NULL;
-    free_pointset(&original_ps);
     free(global_bin_counts_int);
 }

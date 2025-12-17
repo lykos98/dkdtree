@@ -57,7 +57,7 @@ typedef struct partition_t
     //support for parallel partition to be put into a union maybe
     idx_t  offset;
     //support for single thread paritition to be put into a union maybe
-	float_t* base_ptr;
+	point_t* base_ptr;
 
 } partition_t;
 
@@ -103,11 +103,11 @@ typedef struct partition_utils_t
 
 void     simulate_master_read_and_scatter(int, size_t, global_context_t* ); 
 void     top_tree_init(global_context_t *ctx, top_kdtree_t *tree); 
-void     build_top_kdtree(global_context_t *ctx, pointset_t *og_pointset, top_kdtree_t *tree, idx_t n_bins, float_t tolerance);
+void     build_top_kdtree(global_context_t *ctx, top_kdtree_t *tree, idx_t n_bins, float_t tolerance);
 void     exchange_points(global_context_t* ctx, top_kdtree_t* tree);
 void     build_local_tree(global_context_t* ctx, kdtree_t* local_tree);
-size_t   partition_data_around_value(float_t *array, size_t vec_len, size_t compare_dim, size_t left, size_t right, float_t pivot_value);
-size_t parallel_partition_data_around_value(partition_utils_t* p_putils, float_t* in, 
+size_t   partition_data_around_value(point_t *array, size_t vec_len, size_t compare_dim, size_t left, size_t right, float_t pivot_value);
+size_t   parallel_partition_data_around_value(partition_utils_t* p_putils, float_t* in, 
                                             float_t* out, size_t vec_len, size_t compare_dim,
                                             size_t left, size_t right, float_t pivot_value);
 void     mpi_ngbh_search(global_context_t* ctx, datapoint_info_t* dp_info, top_kdtree_t* top_tree, kdtree_t* local_tree, float_t* data, int k);
@@ -116,6 +116,7 @@ void     compute_density_kstarnn_rma_v2(global_context_t* ctx, const float_t d, 
 void     compute_correction(global_context_t* ctx, float_t Z);
 int      foreign_owner(global_context_t*, idx_t);
 void     top_tree_free(global_context_t *ctx, top_kdtree_t *tree);
+void     parallel_build_top_kdtree(global_context_t *ctx, top_kdtree_t *tree, float_t tolerance, idx_t oversampling);
 
 
 

@@ -11,7 +11,7 @@
 //#include <stdarg.h>
 
 #define PARALLEL_FIX_BORDERS
-#define WRITE_SHUFFLED_DATA
+// #define WRITE_SHUFFLED_DATA
 // #define WRITE_NGBH
 // #define WRITE_TOP_NODES
 // #define WRITE_DENSITY
@@ -26,6 +26,8 @@
 // #define PRINT_H2_COMM_SCHEME
 // #define PRINT_H1_CLUSTER_ASSIGN_COMPLETION
 // #define PRINT_ORDERED_BUFFER
+#define PRINT_BALANCE_FACTOR
+// #define CHECK_CORRECT_EXCHANGE
 
 #define DEFAULT_STR_LEN 200
 
@@ -51,7 +53,7 @@
 #define MY_TRUE  1
 #define MY_FALSE 0
 
-#define HERE printf("%d in file %s reached line %d\n", ctx -> mpi_rank, __FILE__, __LINE__); MPI_Barrier(ctx -> mpi_communicator);
+#define HERE printf("%d in file %s reached line %d\n", ctx -> mpi_rank, __FILE__, __LINE__); fflush(stdout); MPI_Barrier(ctx -> mpi_communicator);
 
 #define CHECK_ALLOCATION(x) if(!x){printf("[!!!] %d rank encountered failed allocation: %s at line %s \n", ctx -> mpi_rank, __FILE__, __LINE__ ); exit(1);};
 
@@ -61,7 +63,7 @@
 #define MY_MALLOC(n) ({void* p = calloc(n,1); CHECK_ALLOCATION_NO_CTX(p); p; })
 #endif
 
-#define DB_PRINT(...) printf(__VA_ARGS__)
+#define DB_PRINT(...) printf(__VA_ARGS__); fflush(stdout)
 #ifdef NDEBUG
 	#undef DB_PRINT(...)
 	#define DB_PRINT(...)
@@ -99,10 +101,12 @@
             MPI_Reduce(&time, &max, 1, MPI_DOUBLE, MPI_MAX, 0, ctx -> mpi_communicator); \
             MPI_Barrier(ctx->mpi_communicator); \
             MPI_DB_PRINT("%50.50s -> [avg: %.2lfs, min: %.2lfs, max: %.2lfs]\n", sec_name, avg/((double)ctx -> world_size), min, max); \
+            fflush(stdout); \
         } \
         else \
         { \
             MPI_DB_PRINT("%s\n", sec_name);\
+            fflush(stdout); \
         }\
     }
     
@@ -131,6 +135,15 @@
     #define LOG_START 
     #define LOG
     #define LOG_END
+#endif
+
+#ifndef POINT
+    #define POINT
+    typedef struct point_t
+    {
+        idx_t    array_idx;
+        float_t* data;
+    } point_t;
 #endif
 
 typedef struct datapoint_info_t {
@@ -169,10 +182,10 @@ typedef struct global_context_t
     size_t idx_start;                               //starting index of the points on the processor
     size_t local_n_points;                          //number of points stored in the current processor
     datapoint_info_t*  local_datapoints;            //pointer to the datapoint properties
-    idx_t* rank_idx_start;                            //starting index of datapoints in each processor
-    idx_t* rank_n_points;                             //processor name
-    idx_t* og_idxs;
-    heap_node_t* __local_heap_buffers;                //buffer that stores nearest neighbors
+    idx_t* rank_idx_start;                          //starting index of datapoints in each processor
+    idx_t* rank_n_points;                           //processor name
+    idx_t* og_idxs;                                 //original indexes
+    heap_node_t* __local_heap_buffers;              //buffer that stores nearest neighbors
 	MPI_Comm mpi_communicator;                      //mpi communicator
     int input_data_in_float32;
     char input_data_file[DEFAULT_STR_LEN];
@@ -190,7 +203,7 @@ typedef struct pointset_t
 	size_t n_points;
 	size_t __capacity;
 	uint32_t dims;
-	float_t* data;
+	point_t* datapoints;
 	float_t* lb_box;
 	float_t* ub_box;
 } pointset_t;

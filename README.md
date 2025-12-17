@@ -1,10 +1,13 @@
 # Distributed K-D Tree for Parallel k-NN Search
 
-This repository contains a massively parallel implementation of a k-d tree for performing efficient k-nearest neighbor (k-NN) searches on large-scale, high-dimensional datasets. The implementation is designed for distributed memory systems and leverages a hybrid MPI and OpenMP model to achieve high performance on multi-node, multi-core HPC systems.
+This repository contains a massively parallel implementation of a k-d tree for performing efficient k-nearest neighbor (k-NN) 
+searches on large-scale, high-dimensional datasets. The implementation is designed for distributed memory systems and leverages a hybrid 
+MPI and OpenMP model to achieve high performance on multi-node, multi-core HPC systems.
 
 ## Description
 
-Finding nearest neighbors in large datasets is a fundamental operation in many scientific applications. This project provides a scalable solution by distributing the k-NN problem across multiple compute nodes, allowing it to handle datasets that are too large to fit into a single machine's memory.
+Finding nearest neighbors in large datasets is a fundamental operation in many scientific applications. 
+This project provides a scalable solution by distributing the k-NN problem across multiple compute nodes, allowing it to handle datasets that are too large to fit into a single machine's memory.
 
 The core of this project is a two-level k-d tree structure:
 
@@ -95,6 +98,7 @@ The following example is based on a SLURM script running on 2 nodes, with 2 sock
 This command launches four MPI processes in total. On each of the two nodes, it places one process on each of the two sockets. Each of these processes then spawns 56 OpenMP threads, fully utilizing the 56 cores available to it.
 
 ## Code Structure
+
 -   `src/main/main.c`: The main driver application. Handles argument parsing and orchestrates the k-NN search.
 -   `src/common/`: Contains common utilities, including MPI wrappers, data structures (`global_context_t`), and file I/O.
 -   `src/tree/`: Contains the core logic for the distributed k-d tree and k-NN search.

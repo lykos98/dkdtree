@@ -1,5 +1,6 @@
 #include "common.h"
 #include "mpi.h"
+#include <stdlib.h>
 #include <time.h>
 
 #define ARRAY_INCREMENT 100
@@ -13,8 +14,9 @@ void get_context(global_context_t* ctx)
 	MPI_Get_processor_name(ctx -> processor_mame, &(ctx -> __processor_name_len));
 	MPI_Comm_rank(ctx -> mpi_communicator, &(ctx -> mpi_rank));
 	ctx -> local_data = NULL;
-	ctx -> lb_box 	  = NULL;
-	ctx -> ub_box 	  = NULL;
+	ctx -> lb_box     = NULL;
+	ctx -> ub_box     = NULL;
+    ctx -> og_idxs    = NULL;
     ctx -> rank_n_points  = (idx_t*)malloc(ctx -> world_size * sizeof(idx_t));
     ctx -> rank_idx_start = (idx_t*)malloc(ctx -> world_size * sizeof(idx_t));
     ctx -> local_datapoints = NULL;
@@ -163,6 +165,7 @@ void free_context(global_context_t* ctx)
     FREE_NOT_NULL(ctx -> local_data);
     FREE_NOT_NULL(ctx -> ub_box);
     FREE_NOT_NULL(ctx -> lb_box);
+    FREE_NOT_NULL(ctx -> og_idxs);
     //FREE_NOT_NULL(ctx -> __local_heap_buffers);
     if(ctx -> __local_heap_buffers) MPI_Free_mem(ctx -> __local_heap_buffers);
 
@@ -179,10 +182,10 @@ void free_context(global_context_t* ctx)
 
 void free_pointset(pointset_t* ps)
 {
-	if(ps -> data) 
+	if(ps -> datapoints) 
 	{
-		free(ps -> data);
-		ps -> data = NULL;
+		free(ps -> datapoints);
+		ps -> datapoints = NULL;
 	}
 
 	if(ps -> ub_box)
@@ -210,6 +213,7 @@ void mpi_printf(global_context_t* ctx, const char *fmt, ...)
 		//        myflush(stdout);
 		va_end(l);
 	}
+    fflush(stdout);
 }
 
 void generate_random_matrix(

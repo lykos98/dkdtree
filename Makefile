@@ -7,7 +7,7 @@ LDFLAGS=-lm
 all: main.x
 
 obj=src/main/main.c src/tree/tree.c src/common/common.c 
-main: ${obj} 
+main.x: ${obj} 
 	${CC} ${CFLAGS} ${obj} ${LDFLAGS} -o $@
 
 clean:
